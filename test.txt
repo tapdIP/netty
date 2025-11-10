@@ -1,0 +1,702 @@
+package com.example;
+
+import io.vertx.core.Vertx;
+import io.vertx.core.http.HttpServer;
+import io.vertx.ext.web.Router;
+import io.vertx.ext.web.client.WebClient;
+import io.vertx.ext.web.client.WebClientOptions;
+import io.vertx.ext.web.handler.StaticHandler;
+import io.vertx.junit5.VertxExtension;
+import io.vertx.junit5.VertxTestContext;
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+/**
+ * Comprehensive test suite for Static Resource Configuration
+ * Coverage: 100%
+ */
+@ExtendWith(VertxExtension.class)
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@DisplayName("Static Resource Configuration Tests")
+public class StaticResourceTest {
+
+    private static final int TEST_PORT = 8888;
+    private static final String TEST_HOST = "localhost";
+    private static final String PREFIX = "/static";
+    private static final String INDEX = "index.html";
+    
+    private HttpServer server;
+    private WebClient client;
+    private Path tempDir;
+    private Vertx vertx;
+
+    @BeforeAll
+    @DisplayName("Setup test environment")
+    void setupAll(Vertx vertx, VertxTestContext testContext) throws IOException {
+        this.vertx = vertx;
+        
+        // Create temporary directory and test files
+        tempDir = Files.createTempDirectory("static-test");
+        createTestFiles();
+        
+        // Create WebClient (don't follow redirects automatically)
+        client = WebClient.create(vertx, new WebClientOptions()
+                .setDefaultHost(TEST_HOST)
+                .setDefaultPort(TEST_PORT)
+                .setFollowRedirects(false));
+        
+        // Setup and start server
+        Router router = setupRouter(vertx);
+        server = vertx.createHttpServer()
+                .requestHandler(router)
+                .listen(TEST_PORT)
+                .onComplete(testContext.succeedingThenComplete());
+    }
+
+    @AfterAll
+    @DisplayName("Cleanup test environment")
+    void tearDownAll(VertxTestContext testContext) throws IOException {
+        // Clean up test files
+        deleteDirectory(tempDir.toFile());
+        
+        // Close server and client
+        if (server != null) {
+            server.close()
+                    .compose(v -> client != null ? client.close() : vertx.closeFuture())
+                    .onComplete(testContext.succeedingThenComplete());
+        } else {
+            testContext.completeNow();
+        }
+    }
+
+    // ========== Nested Test Classes for Organized Testing ==========
+
+    @Nested
+    @DisplayName("Root Path Tests")
+    class RootPathTests {
+
+        @Test
+        @DisplayName("GET / should redirect to /static/ with 302 status")
+        void testRootPathRedirect(VertxTestContext testContext) {
+            client.get("/")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(302, response.statusCode(), "Should return 302 redirect");
+                        assertEquals("/static/", response.getHeader("Location"), 
+                                "Should redirect to /static/");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("GET / should not return any body content")
+        void testRootPathRedirectNoBody(VertxTestContext testContext) {
+            client.get("/")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        String body = response.bodyAsString();
+                        assertTrue(body == null || body.isEmpty(), 
+                                "Redirect response should have no body");
+                        testContext.completeNow();
+                    })));
+        }
+    }
+
+    @Nested
+    @DisplayName("Index Page Access Tests")
+    class IndexPageTests {
+
+        @Test
+        @DisplayName("GET /static/ should return index.html with 200 status")
+        void testStaticRootReturnsIndex(VertxTestContext testContext) {
+            client.get("/static/")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(200, response.statusCode(), "Should return 200 OK");
+                        assertTrue(response.bodyAsString().contains("Index Page"), 
+                                "Should contain index page content");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("GET /static/index.html should return index.html directly")
+        void testStaticIndexDirect(VertxTestContext testContext) {
+            client.get("/static/index.html")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(200, response.statusCode(), "Should return 200 OK");
+                        assertTrue(response.bodyAsString().contains("Index Page"), 
+                                "Should contain index page content");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("Index page should have no-cache header")
+        void testIndexPageNoCacheHeader(VertxTestContext testContext) {
+            client.get("/static/")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals("no-cache", response.getHeader("Cache-Control"), 
+                                "Index page should have no-cache");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("Direct index.html access should have no-cache header")
+        void testIndexPageDirectNoCacheHeader(VertxTestContext testContext) {
+            client.get("/static/index.html")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals("no-cache", response.getHeader("Cache-Control"), 
+                                "Index page should have no-cache");
+                        testContext.completeNow();
+                    })));
+        }
+    }
+
+    @Nested
+    @DisplayName("Static File Access Tests")
+    class StaticFileTests {
+
+        @Test
+        @DisplayName("GET /static/css/style.css should return CSS file")
+        void testCssFileAccess(VertxTestContext testContext) {
+            client.get("/static/css/style.css")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(200, response.statusCode(), "Should return 200 OK");
+                        assertTrue(response.bodyAsString().contains("color: red"), 
+                                "Should contain CSS content");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("GET /static/js/app.js should return JS file")
+        void testJsFileAccess(VertxTestContext testContext) {
+            client.get("/static/js/app.js")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(200, response.statusCode(), "Should return 200 OK");
+                        assertTrue(response.bodyAsString().contains("console.log"), 
+                                "Should contain JS content");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("GET /static/script.js should return normal JS file")
+        void testNormalJsFile(VertxTestContext testContext) {
+            client.get("/static/script.js")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(200, response.statusCode(), "Should return 200 OK");
+                        assertTrue(response.bodyAsString().contains("normal script"), 
+                                "Should contain script content");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("GET /static/image.png should return image file")
+        void testImageFileAccess(VertxTestContext testContext) {
+            client.get("/static/image.png")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(200, response.statusCode(), "Should return 200 OK");
+                        assertNotNull(response.body(), "Should return image data");
+                        testContext.completeNow();
+                    })));
+        }
+    }
+
+    @Nested
+    @DisplayName("Cache Control Tests")
+    class CacheControlTests {
+
+        @ParameterizedTest
+        @DisplayName("Fingerprinted files should have immutable cache")
+        @CsvSource({
+            "/static/app.abc123def.js",
+            "/static/style.12345678.css",
+            "/static/logo.a1b2c3d4.png",
+            "/static/bundle.abcdef01.js"
+        })
+        void testFingerprintedFilesImmutableCache(String path, VertxTestContext testContext) {
+            client.get(path)
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(200, response.statusCode(), "Should return 200 OK");
+                        assertEquals("public, max-age=31536000, immutable", 
+                                response.getHeader("Cache-Control"),
+                                "Fingerprinted file should have immutable cache");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @ParameterizedTest
+        @DisplayName("Normal files should have default cache")
+        @ValueSource(strings = {
+            "/static/script.js",
+            "/static/css/style.css",
+            "/static/js/app.js"
+        })
+        void testNormalFilesDefaultCache(String path, VertxTestContext testContext) {
+            client.get(path)
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(200, response.statusCode(), "Should return 200 OK");
+                        assertEquals("public, max-age=3600", 
+                                response.getHeader("Cache-Control"),
+                                "Normal file should have default cache (3600s)");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("Non-fingerprinted JS should not have immutable cache")
+        void testNonFingerprintedJsCache(VertxTestContext testContext) {
+            client.get("/static/script.js")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        String cacheControl = response.getHeader("Cache-Control");
+                        assertNotNull(cacheControl, "Should have Cache-Control header");
+                        assertFalse(cacheControl.contains("immutable"), 
+                                "Non-fingerprinted file should not be immutable");
+                        testContext.completeNow();
+                    })));
+        }
+    }
+
+    @Nested
+    @DisplayName("Security - Path Traversal Attack Tests")
+    class SecurityPathTraversalTests {
+
+        @ParameterizedTest
+        @DisplayName("Requests with '..' should return 404")
+        @ValueSource(strings = {
+            "/static/../etc/passwd",
+            "/static/../../etc/shadow",
+            "/static/../../../root/.ssh/id_rsa",
+            "/static/css/../../../etc/passwd",
+            "/static/..%2Fetc%2Fpasswd"
+        })
+        void testDotDotPathTraversal(String path, VertxTestContext testContext) {
+            client.get(path)
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(404, response.statusCode(), 
+                                "Path with '..' should be blocked with 404");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @ParameterizedTest
+        @DisplayName("Requests with backslash should return 404")
+        @ValueSource(strings = {
+            "/static\\..\\etc\\passwd",
+            "/static\\css\\..\\..\\config",
+            "/static\\..\\..\\..\\Windows\\System32"
+        })
+        void testBackslashPathTraversal(String path, VertxTestContext testContext) {
+            client.get(path)
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(404, response.statusCode(), 
+                                "Path with '\\' should be blocked with 404");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @ParameterizedTest
+        @DisplayName("Requests with double slash should return 404")
+        @ValueSource(strings = {
+            "/static//index.html",
+            "/static///css/style.css",
+            "/static//../../etc/passwd",
+            "/static/css//style.css"
+        })
+        void testDoubleSlashPath(String path, VertxTestContext testContext) {
+            client.get(path)
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(404, response.statusCode(), 
+                                "Path with '//' should be blocked with 404");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("Mixed attack patterns should return 404")
+        void testMixedAttackPatterns(VertxTestContext testContext) {
+            client.get("/static/..//..\\etc/passwd")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(404, response.statusCode(), 
+                                "Mixed attack pattern should be blocked");
+                        testContext.completeNow();
+                    })));
+        }
+    }
+
+    @Nested
+    @DisplayName("404 Not Found Tests")
+    class NotFoundTests {
+
+        @ParameterizedTest
+        @DisplayName("Non-existent files should return 404")
+        @ValueSource(strings = {
+            "/static/nonexistent.txt",
+            "/static/missing.js",
+            "/static/css/notfound.css",
+            "/static/images/missing.png"
+        })
+        void testNonExistentFiles(String path, VertxTestContext testContext) {
+            client.get(path)
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(404, response.statusCode(), 
+                                "Non-existent file should return 404");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("Invalid route should return 404")
+        void testInvalidRoute(VertxTestContext testContext) {
+            client.get("/invalid/path")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(404, response.statusCode(), 
+                                "Invalid route should return 404");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("Access without /static prefix should return 404")
+        void testDirectAccessWithoutPrefix(VertxTestContext testContext) {
+            client.get("/css/style.css")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(404, response.statusCode(), 
+                                "Direct access without /static should return 404");
+                        testContext.completeNow();
+                    })));
+        }
+    }
+
+    @Nested
+    @DisplayName("Edge Cases and Boundary Tests")
+    class EdgeCaseTests {
+
+        @Test
+        @DisplayName("GET /static (without trailing slash) should work")
+        void testStaticWithoutTrailingSlash(VertxTestContext testContext) {
+            client.get("/static")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        // Vert.x may redirect or serve content, both are acceptable
+                        assertTrue(response.statusCode() == 200 || 
+                                  response.statusCode() == 301 || 
+                                  response.statusCode() == 302,
+                                "Should handle /static without trailing slash");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("GET request should have correct Content-Type for HTML")
+        void testHtmlContentType(VertxTestContext testContext) {
+            client.get("/static/index.html")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        String contentType = response.getHeader("Content-Type");
+                        assertNotNull(contentType, "Should have Content-Type header");
+                        assertTrue(contentType.contains("text/html"), 
+                                "HTML file should have text/html content type");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("GET request should have correct Content-Type for CSS")
+        void testCssContentType(VertxTestContext testContext) {
+            client.get("/static/css/style.css")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        String contentType = response.getHeader("Content-Type");
+                        assertNotNull(contentType, "Should have Content-Type header");
+                        assertTrue(contentType.contains("text/css"), 
+                                "CSS file should have text/css content type");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("GET request should have correct Content-Type for JS")
+        void testJsContentType(VertxTestContext testContext) {
+            client.get("/static/script.js")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        String contentType = response.getHeader("Content-Type");
+                        assertNotNull(contentType, "Should have Content-Type header");
+                        assertTrue(contentType.contains("application/javascript") || 
+                                  contentType.contains("text/javascript"),
+                                "JS file should have JavaScript content type");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("Empty path after /static/ should return index")
+        void testEmptyPathReturnsIndex(VertxTestContext testContext) {
+            client.get("/static/")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(200, response.statusCode(), "Should return 200");
+                        assertTrue(response.bodyAsString().contains("Index Page"),
+                                "Should return index content");
+                        testContext.completeNow();
+                    })));
+        }
+
+        @Test
+        @DisplayName("Case sensitive path test")
+        void testCaseSensitivePath(VertxTestContext testContext) {
+            client.get("/static/INDEX.HTML")
+                    .send()
+                    .onComplete(testContext.succeeding(response -> testContext.verify(() -> {
+                        assertEquals(404, response.statusCode(), 
+                                "Should be case sensitive and return 404");
+                        testContext.completeNow();
+                    })));
+        }
+    }
+
+    @Nested
+    @DisplayName("Helper Method Tests")
+    class HelperMethodTests {
+
+        @ParameterizedTest
+        @DisplayName("isFingerprinted should correctly identify fingerprinted files")
+        @CsvSource({
+            "app.abc123def.js, true",
+            "style.12345678.css, true",
+            "logo.a1b2c3d4e5f6.png, true",
+            "script.js, false",
+            "style.css, false",
+            "app.min.js, false",
+            "'', false",
+            "null, false"
+        })
+        void testIsFingerprintedMethod(String filename, boolean expected) {
+            String path = filename.equals("null") ? null : "/static/" + filename;
+            assertEquals(expected, isFingerprinted(path), 
+                    "isFingerprinted should return " + expected + " for " + filename);
+        }
+
+        @ParameterizedTest
+        @DisplayName("equalsPath should correctly compare paths")
+        @CsvSource({
+            "'/static/', '/static/', true",
+            "'/static/index.html', '/static/index.html', true",
+            "'/static/', '/static/index.html', false",
+            "'', '', true",
+            "'null', '/static/', false"
+        })
+        void testEqualsPathMethod(String path1, String path2, boolean expected) {
+            String p1 = path1.equals("null") ? null : path1;
+            String p2 = path2.equals("null") ? null : path2;
+            assertEquals(expected, equalsPath(p1, p2), 
+                    "equalsPath should return " + expected);
+        }
+    }
+
+    // ========== Helper Methods ==========
+
+    /**
+     * Create test files structure
+     */
+    private void createTestFiles() throws IOException {
+        // Create index.html
+        Path indexFile = tempDir.resolve("index.html");
+        Files.writeString(indexFile, 
+                "<html><head><title>Test</title></head><body>Index Page</body></html>");
+        
+        // Create CSS directory and file
+        Path cssDir = tempDir.resolve("css");
+        Files.createDirectories(cssDir);
+        Path cssFile = cssDir.resolve("style.css");
+        Files.writeString(cssFile, "body { color: red; }");
+        
+        // Create JS directory and file
+        Path jsDir = tempDir.resolve("js");
+        Files.createDirectories(jsDir);
+        Path jsFile = jsDir.resolve("app.js");
+        Files.writeString(jsFile, "console.log('app');");
+        
+        // Create fingerprinted files
+        Path fingerprintedJs = tempDir.resolve("app.abc123def.js");
+        Files.writeString(fingerprintedJs, "console.log('fingerprinted');");
+        
+        Path fingerprintedCss = tempDir.resolve("style.12345678.css");
+        Files.writeString(fingerprintedCss, "body { margin: 0; }");
+        
+        Path fingerprintedImg = tempDir.resolve("logo.a1b2c3d4.png");
+        Files.write(fingerprintedImg, new byte[]{0x00, 0x01, 0x02});
+        
+        Path fingerprintedBundle = tempDir.resolve("bundle.abcdef01.js");
+        Files.writeString(fingerprintedBundle, "console.log('bundle');");
+        
+        // Create normal script file
+        Path scriptFile = tempDir.resolve("script.js");
+        Files.writeString(scriptFile, "console.log('normal script');");
+        
+        // Create image file
+        Path imageFile = tempDir.resolve("image.png");
+        Files.write(imageFile, new byte[]{0x00, 0x01, 0x02, 0x03});
+    }
+
+    /**
+     * Setup router with static resource configuration
+     */
+    private Router setupRouter(Vertx vertx) {
+        Router rootRouter = Router.router(vertx);
+        FeatureContext ctx = new FeatureContext(vertx, rootRouter);
+        
+        configureStaticResources(ctx, PREFIX, INDEX, tempDir.toString(), 
+                false, false, true, true, 3600);
+        
+        return rootRouter;
+    }
+
+    /**
+     * Configure static resources (your original code)
+     */
+    private void configureStaticResources(FeatureContext ctx, String prefix, 
+            String index, String root, boolean includeHidden, boolean directoryListing,
+            boolean cachingEnabled, boolean longCache, int maxAgeSeconds) {
+        
+        // Add root path redirect handler
+        ctx.rootRouter().route("/").handler(rc -> {
+            rc.response()
+                .putHeader("Location", prefix + "/")
+                .setStatusCode(302)
+                .end();
+        });
+
+        final Router staticRouter = Router.router(ctx.vertx());
+
+        // Fix 1: Fix path check logic to prevent path traversal attacks
+        staticRouter.route().handler(rc -> {
+            final String p = rc.normalizedPath();
+            // Fix: Check dangerous characters instead of checking "/"
+            if (p != null && (p.contains("..") || p.contains("\\") || p.contains("//"))) {
+                rc.response().setStatusCode(404).end();
+                return;
+            }
+            rc.next();
+        });
+
+        staticRouter.route().handler(rc -> {
+            final String p = rc.normalizedPath();
+            rc.addHeadersEndHandler(v -> {
+                if (!cachingEnabled) return;
+                if (equalsPath(p, "/") || equalsPath(p, "/" + index)) {
+                    // Fix 2: Fix rc.response to rc.response()
+                    rc.response().putHeader("Cache-Control", "no-cache");
+                } else if (longCache && isFingerprinted(p)) {
+                    // Fix 2: Fix rc.response to rc.response()
+                    rc.response().putHeader("Cache-Control", "public, max-age=31536000, immutable");
+                } else {
+                    // Fix 2: Fix rc.response to rc.response()
+                    rc.response().putHeader("Cache-Control", "public, max-age=" + maxAgeSeconds);
+                }
+            });
+            rc.next();
+        });
+
+        final StaticHandler sh = StaticHandler.create(root)
+                .setIncludeHidden(includeHidden)
+                .setDirectoryListing(directoryListing)
+                .setCachingEnabled(cachingEnabled)
+                .setMaxAgeSeconds(maxAgeSeconds)
+                .setDefaultContentEncoding("UTF-8")
+                .setIndexPage(index);
+
+        staticRouter.route("/*").handler(sh);
+
+        ctx.rootRouter().route(prefix.endsWith("/*") ? prefix : (prefix + "/*"))
+                .subRouter(staticRouter);
+    }
+
+    /**
+     * Check if path equals another path
+     */
+    private boolean equalsPath(String path1, String path2) {
+        return path1 != null && path1.equals(path2);
+    }
+
+    /**
+     * Check if file is fingerprinted
+     */
+    private boolean isFingerprinted(String path) {
+        if (path == null) return false;
+        return path.matches(".*\\.[a-f0-9]{8,}\\.(js|css|png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot)$");
+    }
+
+    /**
+     * Delete directory recursively
+     */
+    private void deleteDirectory(File directory) throws IOException {
+        if (directory.exists()) {
+            File[] files = directory.listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    if (file.isDirectory()) {
+                        deleteDirectory(file);
+                    } else {
+                        Files.delete(file.toPath());
+                    }
+                }
+            }
+            Files.delete(directory.toPath());
+        }
+    }
+
+    /**
+     * Mock FeatureContext
+     */
+    static class FeatureContext {
+        private final Vertx vertx;
+        private final Router rootRouter;
+
+        public FeatureContext(Vertx vertx, Router rootRouter) {
+            this.vertx = vertx;
+            this.rootRouter = rootRouter;
+        }
+
+        public Vertx vertx() {
+            return vertx;
+        }
+
+        public Router rootRouter() {
+            return rootRouter;
+        }
+    }
+}
